@@ -1,0 +1,12 @@
+diff -ruN linux-4.9.37_original/drivers/power/reset/Kconfig linux-4.9.37_modified/drivers/power/reset/Kconfig
+--- linux-4.9.37_original/drivers/power/reset/Kconfig	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/drivers/power/reset/Kconfig	2018-07-04 07:50:03.095724580 +0300
+@@ -85,7 +85,7 @@
+ 
+ config POWER_RESET_HISI
+ 	bool "Hisilicon power-off driver"
+-	depends on ARCH_HISI
++	depends on ARCH_HISI || ARCH_HISI_BVT
+ 	help
+ 	  Reboot support for Hisilicon boards.
+ 

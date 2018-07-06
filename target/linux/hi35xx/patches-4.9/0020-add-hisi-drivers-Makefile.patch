@@ -1,0 +1,7 @@
+--- linux-4.9.37_original/drivers/Makefile	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/drivers/Makefile	2018-07-04 07:50:03.059724225 +0300
+@@ -175,3 +175,4 @@
+ obj-$(CONFIG_ANDROID)		+= android/
+ obj-$(CONFIG_NVMEM)		+= nvmem/
+ obj-$(CONFIG_FPGA)		+= fpga/
++obj-$(CONFIG_HI_DMAC)		+= hidmac/

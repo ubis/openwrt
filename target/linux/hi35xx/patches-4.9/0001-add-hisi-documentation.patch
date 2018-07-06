@@ -1,0 +1,96 @@
+diff -ruN linux-4.9.37_original/Documentation/devicetree/bindings/net/hisilicon-femac.txt linux-4.9.37_modified/Documentation/devicetree/bindings/net/hisilicon-femac.txt
+--- linux-4.9.37_original/Documentation/devicetree/bindings/net/hisilicon-femac.txt	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/Documentation/devicetree/bindings/net/hisilicon-femac.txt	2018-07-04 07:50:03.031723950 +0300
+@@ -4,7 +4,9 @@
+ - compatible: should contain one of the following version strings:
+ 	* "hisilicon,hisi-femac-v1"
+ 	* "hisilicon,hisi-femac-v2"
+-	and the soc string "hisilicon,hi3516cv300-femac".
++	and one of the following soc strings:
++	* "hisilicon,hi3516cv300-femac"
++	* "hisilicon,hi3536dv100-femac"
+ - reg: specifies base physical address(s) and size of the device registers.
+   The first region is the MAC core register base and size.
+   The second region is the global MAC control register.
+diff -ruN linux-4.9.37_original/Documentation/devicetree/bindings/net/hisilicon-gemac-mdio.txt linux-4.9.37_modified/Documentation/devicetree/bindings/net/hisilicon-gemac-mdio.txt
+--- linux-4.9.37_original/Documentation/devicetree/bindings/net/hisilicon-gemac-mdio.txt	1970-01-01 03:00:00.000000000 +0300
++++ linux-4.9.37_modified/Documentation/devicetree/bindings/net/hisilicon-gemac-mdio.txt	2018-07-04 07:50:03.031723950 +0300
+@@ -0,0 +1,22 @@
++Hisilicon Gigabit Ethernet MDIO Controller interface
++
++Required properties:
++- compatible: should be "hisilicon,hisi-gemac-mdio".
++- reg: address and length of the register set for the device.
++- clocks: A phandle to the reference clock for this device.
++
++- PHY subnode: inherits from phy binding [1]
++[1] Documentation/devicetree/bindings/net/phy.txt
++
++Example:
++mdio: mdio@100503c0 {
++	compatible = "hisilicon,hisi-gemac-mdio";
++	reg = <0x100503c0 0x20>;
++	clocks = <&crg HI3519V100_MDIO_CLK>;
++	#address-cells = <1>;
++	#size-cells = <0>;
++
++	phy0: phy@1 {
++		reg = <1>;
++	};
++};
+diff -ruN linux-4.9.37_original/Documentation/devicetree/bindings/net/hisilicon-higmac.txt linux-4.9.37_modified/Documentation/devicetree/bindings/net/hisilicon-higmac.txt
+--- linux-4.9.37_original/Documentation/devicetree/bindings/net/hisilicon-higmac.txt	1970-01-01 03:00:00.000000000 +0300
++++ linux-4.9.37_modified/Documentation/devicetree/bindings/net/hisilicon-higmac.txt	2018-07-04 07:50:03.031723950 +0300
+@@ -0,0 +1,52 @@
++Hisilicon higmac controller
++
++Required properties:
++- compatible: should be "hisilicon,higmac" and one of the following:
++	- "hisilicon,higmac-v1"
++	- "hisilicon,higmac-v2"
++	- "hisilicon,higmac-v3"
++	- "hisilicon,higmac-v4"
++	- "hisilicon,higmac-v5"
++- reg: specifies base physical address(s) and size of the device registers.
++  The first region is the MAC register base and size.
++  The second region is external interface control register.
++- interrupts: should contain the MAC interrupt.
++- #address-cells: must be <1>.
++- #size-cells: must be <0>.
++- phy-mode: see ethernet.txt [1].
++- phy-handle: see ethernet.txt [1].
++- mac-address: see ethernet.txt [1].
++- clocks: clock phandle and specifier pair.
++- resets: reset controller phandle and specifier pair.
++
++- PHY subnode: inherits from phy binding [2]
++
++[1] Documentation/devicetree/bindings/net/ethernet.txt
++[2] Documentation/devicetree/bindings/net/phy.txt
++
++Example:
++	higmac: ethernet@10050000 {
++		compatible = "hisilicon,higmac";
++		reg = <0x10050000 0x1000>,<0x120100ec 0x4>;
++		interrupts = <0 25 4>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++		phy-mode = "rgmii";
++		phy-handle = <&eth_phy>;
++		mac-address = [00 00 00 00 00 00];
++		clocks = <&clock HI3519_ETH_CLK>,
++				<&clock HI3519_ETH_MACIF_CLK>;
++		clock-names = "higmac_clk",
++				"macif_clk";
++
++		resets = <&clock 0xcc 0>,
++				<&clock 0xcc 2>,
++				<&clock 0xcc 7>;
++		reset-names = "port_reset",
++				"macif_reset",
++				"phy_reset";
++
++		eth_phy: ethernet-phy@1 {
++			reg = <1>;
++		};
++	};

@@ -1,0 +1,9 @@
+--- linux-4.9.37_original/drivers/Kconfig	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/drivers/Kconfig	2018-07-04 07:50:03.059724225 +0300
+@@ -202,4 +202,6 @@
+ 
+ source "drivers/fpga/Kconfig"
+ 
++source "drivers/hidmac/Kconfig"
++
+ endmenu

@@ -1,0 +1,615 @@
+diff -ruN linux-4.9.37_original/drivers/ata/ahci.h linux-4.9.37_modified/drivers/ata/ahci.h
+--- linux-4.9.37_original/drivers/ata/ahci.h	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/drivers/ata/ahci.h	2018-07-04 07:50:03.063724266 +0300
+@@ -240,6 +240,9 @@
+ 						        error-handling stage) */
+ 	AHCI_HFLAG_NO_DEVSLP		= (1 << 17), /* no device sleep */
+ 	AHCI_HFLAG_NO_FBS		= (1 << 18), /* no FBS */
++#ifdef CONFIG_HISI_SATA
++	AHCI_HFLAG_NO_SXS		= (1 << 19), /* do not support External SATA */
++#endif
+ 
+ #ifdef CONFIG_PCI_MSI
+ 	AHCI_HFLAG_MULTI_MSI		= (1 << 20), /* per-port MSI(-X) */
+@@ -344,6 +347,13 @@
+ 	bool			got_runtime_pm; /* Did we do pm_runtime_get? */
+ 	struct clk		*clks[AHCI_MAX_CLKS]; /* Optional */
+ 	struct regulator	**target_pwrs;	/* Optional */
++
++#ifdef CONFIG_HISI_SATA
++#define         PCI_AHCI 0
++#define         ORI_AHCI 1
++	u32         type;
++#endif
++
+ 	/*
+ 	 * If platform uses PHYs. There is a 1:1 relation between the port number and
+ 	 * the PHY position in this array.
+diff -ruN linux-4.9.37_original/drivers/ata/ahci_platform.c linux-4.9.37_modified/drivers/ata/ahci_platform.c
+--- linux-4.9.37_original/drivers/ata/ahci_platform.c	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/drivers/ata/ahci_platform.c	2018-07-04 07:50:03.063724266 +0300
+@@ -26,6 +26,12 @@
+ 
+ #define DRV_NAME "ahci"
+ 
++#ifdef CONFIG_HISI_SATA_NCQ
++static unsigned int ncq_en = CONFIG_HISI_SATA_NCQ;
++module_param(ncq_en, uint, 0600);
++MODULE_PARM_DESC(ncq_en, "ahci ncq flag (default:1)");
++#endif
++
+ static const struct ata_port_info ahci_port_info = {
+ 	.flags		= AHCI_FLAG_COMMON,
+ 	.pio_mask	= ATA_PIO4,
+@@ -54,8 +60,20 @@
+ 	of_property_read_u32(dev->of_node,
+ 			     "ports-implemented", &hpriv->force_port_map);
+ 
++#ifdef CONFIG_HISI_SATA
++	hpriv->type = ORI_AHCI;
++#ifndef CONFIG_HISI_ESATA
++	hpriv->flags |= AHCI_HFLAG_NO_SXS;
++#endif
++
++#ifdef CONFIG_HISI_SATA_NCQ
++	if (!ncq_en)
++		 hpriv->flags |= AHCI_HFLAG_NO_NCQ;
++#endif
++#else
+ 	if (of_device_is_compatible(dev->of_node, "hisilicon,hisi-ahci"))
+ 		hpriv->flags |= AHCI_HFLAG_NO_FBS | AHCI_HFLAG_NO_NCQ;
++#endif
+ 
+ 	rc = ahci_platform_init_host(pdev, hpriv, &ahci_port_info,
+ 				     &ahci_platform_sht);
+diff -ruN linux-4.9.37_original/drivers/ata/hisi_sata_dbg.c linux-4.9.37_modified/drivers/ata/hisi_sata_dbg.c
+--- linux-4.9.37_original/drivers/ata/hisi_sata_dbg.c	1970-01-01 03:00:00.000000000 +0300
++++ linux-4.9.37_modified/drivers/ata/hisi_sata_dbg.c	2018-07-04 07:50:03.063724266 +0300
+@@ -0,0 +1,158 @@
++#include <linux/kernel.h>
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/libata.h>
++#include <mach/io.h>
++#include "ahci.h"
++#include "hisi_sata_dbg.h"
++
++void hisi_sata_mem_dump(unsigned int *addr, unsigned int size)
++{
++	int ix;
++
++	for (ix = 0; ix < size; ix += 0x04, addr++) {
++		if (!(ix & 0x0F))
++			pr_debug("\n0x%08X: ",
++				(unsigned int)virt_to_phys(addr));
++		pr_debug("%08X ", *addr);
++	}
++}
++EXPORT_SYMBOL(hisi_sata_mem_dump);
++
++void hisi_sata_phys_mem_dump(unsigned int addr, unsigned int size)
++{
++	hisi_sata_mem_dump(phys_to_virt(addr), size);
++}
++EXPORT_SYMBOL(hisi_sata_phys_mem_dump);
++
++void hisi_ahci_reg_dump(void)
++{
++	int ix;
++	unsigned int regbase;
++
++	regbase = CONFIG_HISI_SATA_IOBASE;
++	pr_debug("AHCI GHC Register dump:");
++	for (ix = 0; ix <= 0x28; ix += 0x04) {
++		if (!(ix & 0x0F))
++			pr_debug("\n0x%08X: ", (regbase + ix));
++		pr_debug("%08X ", readl(__io_address(regbase + ix)));
++	}
++	pr_debug("\n");
++
++	regbase = CONFIG_HISI_SATA_IOBASE + 0x0100;
++	pr_debug("AHCI PORT 0 Register dump:");
++	for (ix = 0; ix <= 0x7F; ix += 0x04) {
++		if (!(ix & 0x0F))
++			pr_debug("\n0x%08X: ", (regbase + ix));
++		pr_debug("%08X ", readl(__io_address(regbase + ix)));
++	}
++	pr_debug("\n");
++}
++EXPORT_SYMBOL(hisi_ahci_reg_dump);
++
++void hisi_ahci_rx_fis_dump(struct ata_link *link, int pmp_port_num)
++{
++	struct ahci_port_priv *pp = NULL;
++
++	pp = link->ap->private_data;
++	if (NULL == pp) {
++		pr_debug("Error: pp=NULL\n");
++		return;
++	}
++	pr_debug("ACHI Received FIS:");
++	hisi_sata_phys_mem_dump((unsigned int)(pp->rx_fis_dma),
++				AHCI_RX_FIS_SZ * pmp_port_num);
++	pr_debug("\n");
++}
++EXPORT_SYMBOL_GPL(hisi_ahci_rx_fis_dump);
++
++void hisi_ata_taskfile_dump(struct ata_taskfile *tf)
++{
++	if (NULL == tf) {
++		pr_debug("Error: tf=NULL\n");
++		return;
++	}
++
++	pr_debug("Taskfile dump:\n");
++	pr_debug("flags:0x%08lX, protocol:0x%02X, command:0x%02X, device:0x%02X, ctl:0x%02X\n",
++		tf->flags, tf->protocol, tf->command, tf->device, tf->ctl);
++	pr_debug("feature:0x%08X, nsect:0x%02X, lbal:0x%02X, lbam:0x%02X, lbah:0x%02X\n",
++		tf->feature, tf->nsect, tf->lbal, tf->lbam, tf->lbah);
++	pr_debug("hob_feature:0x%08X, hob_nsect:0x%02X, hob_lbal:0x%02X, hob_lbam:0x%02X, hob_lbah:0x%02X\n",
++		tf->hob_feature, tf->hob_nsect, tf->hob_lbal,
++		tf->hob_lbam, tf->hob_lbah);
++}
++EXPORT_SYMBOL_GPL(hisi_ata_taskfile_dump);
++
++static void __hisi_ahci_st_md(void __iomem *addr)
++{
++	unsigned int *addr_v;
++	unsigned int *tmp;
++	unsigned int i;
++
++	addr_v = (unsigned int *)addr;
++
++	pr_debug("\n\n");
++	for (i = 0; i < 16; i++) {
++		tmp = addr_v + i * 4;
++		pr_debug("%8x: %8x %8x %8x %8x\n",
++			(unsigned int)(addr + i * 16),
++			*tmp, *(tmp + 1), *(tmp + 2), *(tmp + 3));
++	}
++
++	pr_debug("\n");
++}
++
++void hisi_ahci_st_dump(void __iomem *port_base)
++{
++	unsigned int tmp;
++
++	pr_debug("\n**********Dmac status**********\n");
++	tmp = readl(port_base + 0x58);
++	pr_debug("txdmac_curr_st:0x%2x\n", (tmp>>24) & 0xf);
++	tmp = readl(port_base + 0x64);
++	pr_debug("rxdmac_curr_st:0x%2x\n", (tmp>>24) & 0xf);
++	tmp = readl(port_base + 0x70);
++	pr_debug("dmac tx fifo:count-0x%x-empty-%x-ful-%x\n",
++			(tmp>>0) & 0xff,
++			(tmp>>16) & 0x1, (tmp>>17) & 0x1);
++	pr_debug("dmac rx fifo:count-0x%x-empty-%x-ful-%x\n",
++			(tmp>>8) & 0xff,
++			(tmp>>18) & 0x1, (tmp>>19) & 0x1);
++
++	pr_debug("\n");
++	pr_debug("**********HBA status**********\n");
++	tmp = readl(port_base + 0x50);
++	pr_debug("pxxx_curr_st:0x%2x      ndrx_curr_st:0x%2x\n",
++			(tmp>>24) & 0xf,
++			(tmp>>16) & 0xff);
++	pr_debug("cfis_curr_st:0x%2x      piox_curr_st:0x%2x\n",
++			(tmp>>12) & 0xf,
++			(tmp>>8) & 0xf);
++	pr_debug("pmxx_curr_st:0x%2x      errx_curr_st:0x%2x\n",
++			(tmp>>4) & 0xf,
++			(tmp>>0) & 0xf);
++
++	pr_debug("\n");
++	pr_debug("**********Link status**********\n");
++	tmp = readl(port_base + 0x54);
++	pr_debug("link_curr_st:0x%2x\n", (tmp>>24) & 0x1f);
++	pr_debug("link tx fifo:count-0x%x-empty-%x-ful-%x\n",
++			(tmp>>0) & 0x1f,
++			(tmp>>5) & 0x1, (tmp>>6) & 0x1);
++	pr_debug("link rx fifo:count-0x%x-empty-%x-ful-%x\n",
++			(tmp>>8) & 0x1f,
++			(tmp>>13) & 0x1, (tmp>>14) & 0x1);
++	pr_debug("link df fifo:count-0x%x-empty-%x-ful-%x\n\n",
++			(tmp>>16) & 0x1f,
++			(tmp>>21) & 0x1, (tmp>>22) & 0x1);
++
++	pr_debug("**********CMD header**********\n");
++	tmp = readl(port_base + 0x0);
++	__hisi_ahci_st_md(phys_to_virt(tmp));
++	__hisi_ahci_st_md(phys_to_virt(tmp+0x100));
++	__hisi_ahci_st_md(phys_to_virt(tmp+0x200));
++	__hisi_ahci_st_md(phys_to_virt(tmp+0x300));
++}
++EXPORT_SYMBOL_GPL(hisi_ahci_st_dump);
++
+diff -ruN linux-4.9.37_original/drivers/ata/hisi_sata_dbg.h linux-4.9.37_modified/drivers/ata/hisi_sata_dbg.h
+--- linux-4.9.37_original/drivers/ata/hisi_sata_dbg.h	1970-01-01 03:00:00.000000000 +0300
++++ linux-4.9.37_modified/drivers/ata/hisi_sata_dbg.h	2018-07-04 07:50:03.063724266 +0300
+@@ -0,0 +1,47 @@
++
++#ifndef _HISI_SATA_DBG_H
++#define _HISI_SATA_DBG_H
++#include <linux/kernel.h>
++#include <linux/delay.h>
++#include <linux/libata.h>
++#include "ahci.h"
++
++
++void hisi_sata_mem_dump(unsigned int *addr, unsigned int size);
++void hisi_sata_phys_mem_dump(unsigned int addr, unsigned int size);
++void hisi_ahci_rx_fis_dump(struct ata_link *link, int pmp_port_num);
++void hisi_ata_taskfile_dump(struct ata_taskfile *tf);
++void hisi_ahci_st_dump(void __iomem *port_base);
++void hisi_ahci_reg_dump(void);
++
++#define HISI_AHCI_REG_DUMP(X) \
++do {\
++	pr_debug("------------------[ Start ]--------------------\n"); \
++	pr_debug("Dump AHCI registers at %s %d\n", __func__, __LINE__); \
++	hisi_ahci_reg_dump(); \
++	pr_debug("------------------[  End  ]--------------------\n");\
++} while (0)
++
++#define hisi_sata_readl(addr) do {\
++		unsigned int reg = readl((unsigned int)addr); \
++		pr_debug("HI_AHCI(REG) %s:%d: readl(0x%08X) = 0x%08X\n",\
++		__func__, __LINE__, (unsigned int)addr, reg); \
++		reg;\
++	} while (0)
++
++#define hisi_sata_writel(v, addr) do { writel(v, (unsigned int)addr); \
++	pr_debug("HI_AHCI(REG) %s:%d: writel(0x%08X) = 0x%08X\n",\
++		__func__, __LINE__, (unsigned int)addr, \
++		(unsigned int)(v)); \
++	} while (0)
++
++#undef HISI_DUMP_AHCI_REG_OPS
++#ifdef HISI_DUMP_AHCI_REG_OPS
++#define readl(addr) hisi_sata_readl(addr)
++#define write(v, addr) hisi_sata_writel(v, addr)
++#endif
++
++#endif /* _HISI_SATA_DBG_H */
++
++
++
+diff -ruN linux-4.9.37_original/drivers/ata/Kconfig linux-4.9.37_modified/drivers/ata/Kconfig
+--- linux-4.9.37_original/drivers/ata/Kconfig	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/drivers/ata/Kconfig	2018-07-04 07:50:03.059724225 +0300
+@@ -2,6 +2,8 @@
+ # SATA/PATA driver configuration
+ #
+ 
++source "drivers/ata/Kconfig.hiahci"
++
+ config HAVE_PATA_PLATFORM
+ 	bool
+ 	help
+diff -ruN linux-4.9.37_original/drivers/ata/Kconfig.hiahci linux-4.9.37_modified/drivers/ata/Kconfig.hiahci
+--- linux-4.9.37_original/drivers/ata/Kconfig.hiahci	1970-01-01 03:00:00.000000000 +0300
++++ linux-4.9.37_modified/drivers/ata/Kconfig.hiahci	2018-07-04 07:50:03.059724225 +0300
+@@ -0,0 +1,43 @@
++menuconfig HISI_SATA
++	bool "Hisilicon sata device support"
++	depends on ARCH_HI3536DV100
++	default y if ARCH_HI3536DV100
++	select ATA
++	select ATA_VERBOSE_ERROR
++	select SATA_PMP
++	select SATA_AHCI_PLATFORM
++
++if HISI_SATA
++config HISI_SATA_IOBASE
++	hex "Hisi sata IO address"
++	default "0x10030000" if ARCH_HI3536DV100
++	help
++	  hisilicon sata io base address.
++
++config HISI_SATA_FBS
++	int "Hisi sata FIS-Based switching"
++	default 1
++	range 0 1
++	help
++	  Hisatav200 supports FBS.
++	  FBS is FIS-Based switching.
++	  Choose y if you want to use it.
++
++config HISI_SATA_NCQ
++	int "Hisi sata Native Command Queuing"
++	default 1
++	range 0 1
++	help
++	  Hisatav200 supports NCQ.
++	  NCQ is Native Command Queuing.
++	  Choose y if you want to use it.
++
++config HISI_ESATA
++	bool "Support Hisi eSATA"
++	default n
++	help
++	  Hisatav200 supports eSATA.
++	  Choose y if you want to use it.
++
++endif
++
+diff -ruN linux-4.9.37_original/drivers/ata/libahci.c linux-4.9.37_modified/drivers/ata/libahci.c
+--- linux-4.9.37_original/drivers/ata/libahci.c	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/drivers/ata/libahci.c	2018-07-04 07:50:03.063724266 +0300
+@@ -57,6 +57,30 @@
+ module_param_named(ignore_sss, ahci_ignore_sss, int, 0444);
+ MODULE_PARM_DESC(ignore_sss, "Ignore staggered spinup flag (0=don't ignore, 1=ignore)");
+ 
++#ifdef CONFIG_HISI_SATA_FBS
++static int fbs_en = CONFIG_HISI_SATA_FBS;
++module_param(fbs_en, uint, 0600);
++MODULE_PARM_DESC(fbs_en, "ahci fbs flags (default:1)");
++
++#define AHCI_TIMEOUT_COUNT	10
++#define AHCI_POLL_TIMER		(20 * HZ)
++
++struct ata_fbs_ctrl {
++	unsigned int fbs_enable_ctrl; /* fbs enable or disable control switch */
++	unsigned int fbs_mode_ctrl;   /* 1.5G: fbs disable, 3G/6G: fbs enable */
++	unsigned int fbs_enable_flag;
++	unsigned int fbs_disable_flag;
++	unsigned int fbs_cmd_issue_flag;
++	struct timer_list poll_timer;
++};
++static struct ata_fbs_ctrl fbs_ctrl[4];
++extern void hisi_sata_set_fifoth(void *mmio);
++#endif
++#ifdef CONFIG_ARCH_HI3536DV100
++extern void hisi_sata_reset_rxtx_assert(void);
++extern void hisi_sata_reset_rxtx_deassert(void);
++#endif
++
+ static int ahci_set_lpm(struct ata_link *link, enum ata_lpm_policy policy,
+ 			unsigned hints);
+ static ssize_t ahci_led_show(struct ata_port *ap, char *buf);
+@@ -503,6 +527,13 @@
+ 		cap &= ~HOST_CAP_FBS;
+ 	}
+ 
++#ifdef CONFIG_HISI_SATA
++	if ((cap & HOST_CAP_SXS) && (hpriv->flags & AHCI_HFLAG_NO_SXS)) {
++		dev_info(dev, "controller can't support eSATA, turning off CAP_SXS\n");
++		cap &= ~HOST_CAP_SXS;
++	}
++#endif
++
+ 	if (hpriv->force_port_map && port_map != hpriv->force_port_map) {
+ 		dev_info(dev, "forcing port_map 0x%x -> 0x%x\n",
+ 			 port_map, hpriv->force_port_map);
+@@ -1380,8 +1411,28 @@
+ 	bool fbs_disabled = false;
+ 	int rc;
+ 
++#ifdef CONFIG_HISI_SATA_FBS
++	unsigned int port_num = ap->port_no;
++#endif
++
+ 	DPRINTK("ENTER\n");
+ 
++#ifdef CONFIG_HISI_SATA_FBS
++	if (fbs_ctrl[port_num].fbs_enable_ctrl &&
++			(link->pmp == SATA_PMP_CTRL_PORT) &&
++			(hpriv->type == ORI_AHCI)) {
++		struct ahci_port_priv *pp = ap->private_data;
++
++		if (pp->fbs_enabled == false)
++			ahci_enable_fbs(ap);
++
++		fbs_ctrl[port_num].fbs_enable_flag = 0;
++		fbs_ctrl[port_num].fbs_disable_flag = 0;
++		fbs_ctrl[port_num].fbs_cmd_issue_flag = 0;
++
++	}
++#endif
++
+ 	/* prepare for SRST (AHCI-1.1 10.4.1) */
+ 	rc = ahci_kick_engine(ap);
+ 	if (rc && rc != -EOPNOTSUPP)
+@@ -1410,6 +1461,10 @@
+ 				 AHCI_CMD_RESET | AHCI_CMD_CLR_BUSY, msecs)) {
+ 		rc = -EIO;
+ 		reason = "1st FIS failed";
++#ifdef CONFIG_ARCH_HI3536DV100
++		hisi_sata_reset_rxtx_assert();
++		hisi_sata_reset_rxtx_deassert();
++#endif
+ 		goto fail;
+ 	}
+ 
+@@ -1599,6 +1654,68 @@
+ 	struct ata_port *ap = qc->ap;
+ 	struct ahci_port_priv *pp = ap->private_data;
+ 
++#ifdef CONFIG_HISI_SATA_FBS
++	struct ahci_host_priv *hpriv = ap->host->private_data;
++	int is_atapi = ata_is_atapi(qc->tf.protocol);
++	void __iomem *port_mmio = ahci_port_base(ap);
++	unsigned int port_num = ap->port_no;
++	unsigned int cmd_timeout_count;
++
++	if (fbs_ctrl[port_num].fbs_enable_ctrl &&
++			(ap->link.pmp == SATA_PMP_CTRL_PORT) &&
++			(hpriv->type == ORI_AHCI)) {
++		if (is_atapi || fbs_ctrl[ap->port_no].fbs_cmd_issue_flag) {
++			mod_timer(&fbs_ctrl[port_num].poll_timer,
++					jiffies + AHCI_POLL_TIMER);
++
++			if (!fbs_ctrl[port_num].fbs_disable_flag) {
++				cmd_timeout_count = 0;
++				while (readl(port_mmio + PORT_SCR_ACT)
++						|| readl(port_mmio
++							+ PORT_CMD_ISSUE)
++						|| readl(port_mmio
++							+ PORT_IRQ_STAT)) {
++					cmd_timeout_count++;
++					if (cmd_timeout_count >=
++							AHCI_TIMEOUT_COUNT) {
++						fbs_ctrl[ap->port_no].
++							fbs_cmd_issue_flag = 1;
++						return ATA_DEFER_LINK;
++					}
++				}
++
++				if (pp->fbs_enabled == true)
++					ahci_disable_fbs(ap);
++
++				ap->excl_link = NULL;
++				ap->nr_active_links = 0;
++				fbs_ctrl[port_num].fbs_disable_flag = 1;
++				fbs_ctrl[port_num].fbs_enable_flag = 0;
++				fbs_ctrl[ap->port_no].fbs_cmd_issue_flag = 0;
++			}
++		} else {
++			if (fbs_ctrl[port_num].fbs_enable_flag) {
++				cmd_timeout_count = 0;
++				while (readl(port_mmio + PORT_SCR_ACT)
++						|| readl(port_mmio
++							+ PORT_CMD_ISSUE)
++						|| readl(port_mmio
++							+ PORT_IRQ_STAT)) {
++					cmd_timeout_count++;
++					if (cmd_timeout_count >=
++							AHCI_TIMEOUT_COUNT) {
++						return ATA_DEFER_LINK;
++					}
++				}
++
++				if (pp->fbs_enabled == false)
++					ahci_enable_fbs(ap);
++				fbs_ctrl[port_num].fbs_enable_flag = 0;
++				fbs_ctrl[port_num].fbs_disable_flag = 0;
++			}
++		}
++	}
++#endif
+ 	if (!sata_pmp_attached(ap) || pp->fbs_enabled)
+ 		return ata_std_qc_defer(qc);
+ 	else
+@@ -1643,6 +1760,7 @@
+ 	ahci_fill_cmd_slot(pp, qc->tag, opts);
+ }
+ 
++#ifndef CONFIG_HISI_SATA_FBS
+ static void ahci_fbs_dec_intr(struct ata_port *ap)
+ {
+ 	struct ahci_port_priv *pp = ap->private_data;
+@@ -1666,6 +1784,7 @@
+ 	if (fbs & PORT_FBS_DEC)
+ 		dev_err(ap->host->dev, "failed to clear device error\n");
+ }
++#endif
+ 
+ static void ahci_error_intr(struct ata_port *ap, u32 irq_stat)
+ {
+@@ -1773,7 +1892,9 @@
+ 		ata_port_freeze(ap);
+ 	else if (fbs_need_dec) {
+ 		ata_link_abort(link);
++#ifndef CONFIG_HISI_SATA_FBS
+ 		ahci_fbs_dec_intr(ap);
++#endif
+ 	} else
+ 		ata_port_abort(ap);
+ }
+@@ -2170,7 +2291,9 @@
+ 	writel(fbs | PORT_FBS_EN, port_mmio + PORT_FBS);
+ 	fbs = readl(port_mmio + PORT_FBS);
+ 	if (fbs & PORT_FBS_EN) {
++#ifndef CONFIG_HISI_SATA_FBS
+ 		dev_info(ap->host->dev, "FBS is enabled\n");
++#endif
+ 		pp->fbs_enabled = true;
+ 		pp->fbs_last_dev = -1; /* initialization */
+ 	} else
+@@ -2210,6 +2333,9 @@
+ 	}
+ 
+ 	hpriv->start_engine(ap);
++#ifdef CONFIG_HISI_SATA_FBS
++	hisi_sata_set_fifoth(port_mmio);
++#endif
+ }
+ 
+ static void ahci_pmp_attach(struct ata_port *ap)
+@@ -2218,12 +2344,24 @@
+ 	struct ahci_port_priv *pp = ap->private_data;
+ 	u32 cmd;
+ 
++#ifdef CONFIG_HISI_SATA_FBS
++	struct ahci_host_priv *hpriv = ap->host->private_data;
++	unsigned int port_num = ap->port_no;
++#endif
++
+ 	cmd = readl(port_mmio + PORT_CMD);
+ 	cmd |= PORT_CMD_PMP;
+ 	writel(cmd, port_mmio + PORT_CMD);
+ 
+ 	ahci_enable_fbs(ap);
+ 
++#ifdef CONFIG_HISI_SATA_FBS
++	if (hpriv->type == ORI_AHCI) {
++		if (!fbs_ctrl[port_num].fbs_enable_ctrl)
++			ahci_disable_fbs(ap);
++	}
++#endif
++
+ 	pp->intr_mask |= PORT_IRQ_BAD_PMP;
+ 
+ 	/*
+@@ -2292,6 +2430,19 @@
+ }
+ #endif
+ 
++#ifdef CONFIG_HISI_SATA_FBS
++static void ahci_poll_func(unsigned long arg)
++{
++	struct ata_port *ap = (struct ata_port *)arg;
++	unsigned int port_num = ap->port_no;
++
++	if (ap->link.pmp == SATA_PMP_CTRL_PORT) {
++		fbs_ctrl[port_num].fbs_enable_flag = 1;
++		fbs_ctrl[port_num].fbs_disable_flag = 0;
++	}
++}
++#endif
++
+ static int ahci_port_start(struct ata_port *ap)
+ {
+ 	struct ahci_host_priv *hpriv = ap->host->private_data;
+@@ -2385,6 +2536,20 @@
+ 
+ 	ap->private_data = pp;
+ 
++#ifdef CONFIG_HISI_SATA_FBS
++	if (hpriv->type == ORI_AHCI) {
++		fbs_ctrl[ap->port_no].fbs_enable_ctrl = fbs_en;
++		fbs_ctrl[ap->port_no].fbs_enable_flag = 0;
++		fbs_ctrl[ap->port_no].fbs_disable_flag = 0;
++		fbs_ctrl[ap->port_no].fbs_cmd_issue_flag = 0;
++
++		init_timer(&fbs_ctrl[ap->port_no].poll_timer);
++		fbs_ctrl[ap->port_no].poll_timer.function = ahci_poll_func;
++		fbs_ctrl[ap->port_no].poll_timer.data = (unsigned long)ap;
++		fbs_ctrl[ap->port_no].poll_timer.expires = jiffies + AHCI_POLL_TIMER;
++	}
++#endif
++
+ 	/* engage engines, captain */
+ 	return ahci_port_resume(ap);
+ }
+diff -ruN linux-4.9.37_original/drivers/ata/Makefile linux-4.9.37_modified/drivers/ata/Makefile
+--- linux-4.9.37_original/drivers/ata/Makefile	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/drivers/ata/Makefile	2018-07-04 07:50:03.063724266 +0300
+@@ -1,5 +1,6 @@
+ 
+ obj-$(CONFIG_ATA)		+= libata.o
++obj-$(CONFIG_HISI_SATA)       += hisi_sata_dbg.o
+ 
+ # non-SFF interface
+ obj-$(CONFIG_SATA_AHCI)		+= ahci.o libahci.o
