@@ -1,0 +1,15 @@
+Index: linux-4.9.110/drivers/clocksource/timer-sp804.c
+===================================================================
+--- linux-4.9.110.orig/drivers/clocksource/timer-sp804.c
++++ linux-4.9.110/drivers/clocksource/timer-sp804.c
+@@ -235,6 +235,10 @@ static int __init sp804_of_init(struct d
+ 	writel(0, base + TIMER_CTRL);
+ 	writel(0, base + TIMER_2_BASE + TIMER_CTRL);
+ 
++	/* Ensure timer interrupts are clear */
++	writel(1, base + TIMER_INTCLR);
++	writel(1, base + TIMER_2_BASE + TIMER_INTCLR);
++
+ 	if (initialized || !of_device_is_available(np)) {
+ 		ret = -EINVAL;
+ 		goto err;
