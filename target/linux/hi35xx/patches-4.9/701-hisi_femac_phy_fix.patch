@@ -1,0 +1,186 @@
+Index: linux-4.9.110/drivers/net/ethernet/hisilicon/Makefile
+===================================================================
+--- linux-4.9.110.orig/drivers/net/ethernet/hisilicon/Makefile
++++ linux-4.9.110/drivers/net/ethernet/hisilicon/Makefile
+@@ -6,4 +6,4 @@ obj-$(CONFIG_HIX5HD2_GMAC) += hix5hd2_gm
+ obj-$(CONFIG_HIP04_ETH) += hip04_eth.o
+ obj-$(CONFIG_HNS_MDIO) += hns_mdio.o
+ obj-$(CONFIG_HNS) += hns/
+-obj-$(CONFIG_HISI_FEMAC) += hisi_femac.o
++obj-$(CONFIG_HISI_FEMAC) += hisi_femac.o phy_fix.o
+Index: linux-4.9.110/drivers/net/ethernet/hisilicon/festa_v272_2723.h
+===================================================================
+--- /dev/null
++++ linux-4.9.110/drivers/net/ethernet/hisilicon/festa_v272_2723.h
+@@ -0,0 +1,102 @@
++0x33f9, 0xbd,
++0x33fa, 0x34,
++0x33fb, 0x00,
++0x33fc, 0x39,
++0x3400, 0x39,
++0x3401, 0xCC,
++0x3402, 0x27,
++0x3403, 0x23,
++0x3404, 0xFD,
++0x3405, 0xFF,
++0x3406, 0xF0,
++0x3407, 0x20,
++0x3408, 0x00,
++0x3409, 0x3C,
++0x340A, 0x3C,
++0x340B, 0x30,
++0x340C, 0xF6,
++0x340D, 0x00,
++0x340E, 0x4A,
++0x340F, 0xC4,
++0x3410, 0x7F,
++0x3411, 0xE7,
++0x3412, 0x01,
++0x3413, 0xF6,
++0x3414, 0x01,
++0x3415, 0xBE,
++0x3416, 0xC1,
++0x3417, 0x02,
++0x3418, 0x27,
++0x3419, 0x0E,
++0x341A, 0xE6,
++0x341B, 0x01,
++0x341C, 0xC1,
++0x341D, 0x14,
++0x341E, 0x27,
++0x341F, 0x08,
++0x3420, 0xC1,
++0x3421, 0x18,
++0x3422, 0x25,
++0x3423, 0x09,
++0x3424, 0xC1,
++0x3425, 0x1B,
++0x3426, 0x22,
++0x3427, 0x05,
++0x3428, 0xC6,
++0x3429, 0x5C,
++0x342A, 0xF7,
++0x342B, 0x20,
++0x342C, 0xA1,
++0x342D, 0xF6,
++0x342E, 0x01,
++0x342F, 0xBF,
++0x3430, 0xC1,
++0x3431, 0x01,
++0x3432, 0x26,
++0x3433, 0x29,
++0x3434, 0xF6,
++0x3435, 0x30,
++0x3436, 0x55,
++0x3437, 0xC0,
++0x3438, 0x05,
++0x3439, 0xE7,
++0x343A, 0x01,
++0x343B, 0xC1,
++0x343C, 0x13,
++0x343D, 0x23,
++0x343E, 0x04,
++0x343F, 0xC6,
++0x3440, 0x13,
++0x3441, 0xE7,
++0x3442, 0x01,
++0x3443, 0x18,
++0x3444, 0xFE,
++0x3445, 0x30,
++0x3446, 0x4C,
++0x3447, 0x18,
++0x3448, 0x3A,
++0x3449, 0x18,
++0x344A, 0xE6,
++0x344B, 0x00,
++0x344C, 0x58,
++0x344D, 0x58,
++0x344E, 0x58,
++0x344F, 0x58,
++0x3450, 0x58,
++0x3451, 0xE7,
++0x3452, 0x00,
++0x3453, 0xF6,
++0x3454, 0x20,
++0x3455, 0x04,
++0x3456, 0xC4,
++0x3457, 0x1F,
++0x3458, 0xEA,
++0x3459, 0x00,
++0x345A, 0xF7,
++0x345B, 0x20,
++0x345C, 0x04,
++0x345D, 0x38,
++0x345E, 0x38,
++0x345F, 0x39,
++0x3400, 0x01,
++0x33f8, 0x01
+Index: linux-4.9.110/drivers/net/ethernet/hisilicon/phy_fix.c
+===================================================================
+--- /dev/null
++++ linux-4.9.110/drivers/net/ethernet/hisilicon/phy_fix.c
+@@ -0,0 +1,52 @@
++#include <linux/phy.h>
++#include "phy_fix.h"
++
++static const u32 phy_v272_fix_param[] = {
++#include "festa_v272_2723.h"
++};
++
++static int phy_expanded_write_bulk(struct phy_device *phy_dev,
++				   const u32 reg_and_val[], int count)
++{
++	int i, v, ret = 0;
++	u32 reg_addr;
++	u16 val;
++
++	v = phy_read(phy_dev, MII_BMCR);
++	v |= BMCR_PDOWN;
++	phy_write(phy_dev, MII_BMCR, v);
++
++	for (i = 0; i < (2 * count); i += 2) {
++		reg_addr = reg_and_val[i];
++		val = (u16)reg_and_val[i + 1];
++		phy_write(phy_dev, MII_EXPMA, reg_addr);
++		ret = phy_write(phy_dev, MII_EXPMD, val);
++	}
++
++	v = phy_read(phy_dev, MII_BMCR);
++	v &= (~BMCR_PDOWN);
++	phy_write(phy_dev, MII_BMCR, v);
++
++	return ret;
++}
++
++static int hisilicon_fephy_v272_fix(struct phy_device *phy_dev)
++{
++	int count;
++
++	count = ARRAY_SIZE(phy_v272_fix_param);
++	if (count % 2)
++		pr_warn("internal FEPHY fix register count is not right.\n");
++	count /= 2;
++
++	phy_expanded_write_bulk(phy_dev, phy_v272_fix_param, count);
++
++	return 0;
++}
++
++void phy_register_fixups(void)
++{
++	phy_register_fixup_for_uid(HISILICON_PHY_ID_FESTAV272,
++				   HISILICON_PHY_MASK,
++				   hisilicon_fephy_v272_fix);
++}
+Index: linux-4.9.110/drivers/net/ethernet/hisilicon/phy_fix.h
+===================================================================
+--- /dev/null
++++ linux-4.9.110/drivers/net/ethernet/hisilicon/phy_fix.h
+@@ -0,0 +1,7 @@
++#define HISILICON_PHY_ID_FESTAV272	0x20669901
++#define HISILICON_PHY_MASK		0xfffffff0
++
++#define MII_EXPMD		0x1d
++#define MII_EXPMA		0x1e
++
++void phy_register_fixups(void);
