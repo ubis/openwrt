@@ -10,13 +10,13 @@
 	compatible = "shuttle,kd20", "oxsemi,ox820";
 
 	chosen {
-		bootargs = "earlyprintk";
+		bootargs = "earlyprintk console=ttyS0,115200";
 		stdout-path = "serial0:115200n8";
 	};
 
 	memory {
-		/* 128Mbytes DDR */
-		reg = <0x60000000 0x8000000>;
+		/* 256Mbytes DDR */
+		reg = <0x60000000 0x10000000>;
 	};
 
 	aliases {
@@ -37,7 +37,7 @@
 		};
 	};
 
-	gpio-keys-polled {
+	keys {
 		compatible = "gpio-keys-polled";
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -65,7 +65,7 @@
 		};
 	};
 
-	gpio-leds {
+	leds {
 		compatible = "gpio-leds";
 		status {
 			label = "kd20:blue:status";
@@ -145,8 +145,13 @@
 
 		partition@40000 {
 			label = "u-boot";
-			reg = <0x00040000 0x00200000>;
+			reg = <0x00040000 0x001e0000>;
 			read-only;
+		};
+
+		partition@220000 {
+			label = "u-boot-env";
+			reg = <0x00220000 0x00020000>;
 		};
 
 		partition@240000 {
