@@ -1,0 +1,13 @@
+Index: linux-4.9.162/drivers/mtd/spi-nor/Kconfig
+===================================================================
+--- linux-4.9.162.orig/drivers/mtd/spi-nor/Kconfig
++++ linux-4.9.162/drivers/mtd/spi-nor/Kconfig
+@@ -71,7 +71,7 @@ config SPI_FSL_QUADSPI
+ 
+ config SPI_HISI_SFC
+ 	tristate "Hisilicon SPI-NOR Flash Controller(SFC)"
+-	depends on ARCH_HISI || COMPILE_TEST
++	depends on ARCH_HISI || ARCH_HISI_BVT || COMPILE_TEST
+ 	depends on HAS_IOMEM && HAS_DMA
+ 	help
+ 	  This enables support for hisilicon SPI-NOR flash controller.
