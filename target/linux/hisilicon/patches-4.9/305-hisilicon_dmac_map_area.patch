@@ -1,0 +1,14 @@
+diff -ruN linux-4.9.37_original/arch/arm/mm/dma-mapping.c linux-4.9.37_modified/arch/arm/mm/dma-mapping.c
+--- linux-4.9.37_original/arch/arm/mm/dma-mapping.c	2017-07-12 16:42:41.000000000 +0300
++++ linux-4.9.37_modified/arch/arm/mm/dma-mapping.c	2018-07-04 07:50:03.059724225 +0300
+@@ -2415,3 +2415,10 @@
+ {
+ 	arm_teardown_iommu_dma_ops(dev);
+ }
++
++void hi_dmac_map_area(const void *kaddr, size_t size,
++			enum dma_data_direction dir)
++{
++	dmac_map_area(kaddr, size, dir);
++}
++EXPORT_SYMBOL(hi_dmac_map_area);

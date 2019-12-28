@@ -1,0 +1,13 @@
+diff --git a/drivers/power/reset/Kconfig b/drivers/power/reset/Kconfig
+index 02e46bb..cf3e643 100644
+--- a/drivers/power/reset/Kconfig
++++ b/drivers/power/reset/Kconfig
+@@ -85,7 +85,7 @@ config POWER_RESET_GPIO_RESTART
+ 
+ config POWER_RESET_HISI
+ 	bool "Hisilicon power-off driver"
+-	depends on ARCH_HISI
++	depends on ARCH_HISI || ARCH_HISI_BVT
+ 	help
+ 	  Reboot support for Hisilicon boards.
+ 
