@@ -1,3 +1,18 @@
+Index: linux-4.9.162/Documentation/devicetree/bindings/net/hisilicon-femac.txt
+===================================================================
+--- linux-4.9.162.orig/Documentation/devicetree/bindings/net/hisilicon-femac.txt
++++ linux-4.9.162/Documentation/devicetree/bindings/net/hisilicon-femac.txt
+@@ -4,7 +4,9 @@ Required properties:
+ - compatible: should contain one of the following version strings:
+ 	* "hisilicon,hisi-femac-v1"
+ 	* "hisilicon,hisi-femac-v2"
+-	and the soc string "hisilicon,hi3516cv300-femac".
++	and one of the following soc strings:
++	* "hisilicon,hi3516cv300-femac"
++	* "hisilicon,hi3536dv100-femac"
+ - reg: specifies base physical address(s) and size of the device registers.
+   The first region is the MAC core register base and size.
+   The second region is the global MAC control register.
 Index: linux-4.9.162/drivers/net/ethernet/hisilicon/Makefile
 ===================================================================
 --- linux-4.9.162.orig/drivers/net/ethernet/hisilicon/Makefile
@@ -117,8 +132,8 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/festa_v272_2723.h
 +0x33f8, 0x01
 Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
 ===================================================================
---- linux-4.9.162.orig/drivers/net/ethernet/hisilicon/hisi_femac.c
-+++ linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
+--- linux-4.9.110.orig/drivers/net/ethernet/hisilicon/hisi_femac.c
++++ linux-4.9.110/drivers/net/ethernet/hisilicon/hisi_femac.c
 @@ -20,12 +20,20 @@
  #include <linux/circ_buf.h>
  #include <linux/clk.h>
@@ -256,7 +271,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  struct hisi_femac_priv {
  	void __iomem *port_base;
  	void __iomem *glb_base;
-@@ -129,10 +213,40 @@ struct hisi_femac_priv {
+@@ -129,13 +213,44 @@ struct hisi_femac_priv {
  	struct device *dev;
  	struct net_device *ndev;
  
@@ -266,6 +281,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
 +	struct hisi_femac_tx_desc_ring tx_ring;
  	u32 tx_fifo_used_cnt;
  	struct napi_struct napi;
++
 +	/* 802.3x flow control */
 +	bool tx_pause_en;
 +	u32 tx_pause_active_thresh;
@@ -296,8 +312,21 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
 +	/* struct frags_info frags[MAX_SKB_FRAGS]; */
  };
  
- static void hisi_femac_irq_enable(struct hisi_femac_priv *priv, int irqs)
-@@ -151,13 +265,65 @@ static void hisi_femac_irq_disable(struc
+-static void hisi_femac_irq_enable(struct hisi_femac_priv *priv, int irqs)
++static void hisi_femac_irq_enable(struct hisi_femac_priv *priv, u32 irqs)
+ {
+ 	u32 val;
+ 
+@@ -143,7 +258,7 @@ static void hisi_femac_irq_enable(struct
+ 	writel(val | irqs, priv->glb_base + GLB_IRQ_ENA);
+ }
+ 
+-static void hisi_femac_irq_disable(struct hisi_femac_priv *priv, int irqs)
++static void hisi_femac_irq_disable(struct hisi_femac_priv *priv, u32 irqs)
+ {
+ 	u32 val;
+ 
+@@ -151,13 +266,65 @@ static void hisi_femac_irq_disable(struc
  	writel(val & (~irqs), priv->glb_base + GLB_IRQ_ENA);
  }
  
@@ -366,7 +395,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  }
  
  static void hisi_femac_xmit_reclaim(struct net_device *dev)
-@@ -198,6 +364,266 @@ static void hisi_femac_xmit_reclaim(stru
+@@ -198,6 +365,266 @@ static void hisi_femac_xmit_reclaim(stru
  	netif_tx_unlock(dev);
  }
  
@@ -633,7 +662,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  static void hisi_femac_adjust_link(struct net_device *dev)
  {
  	struct hisi_femac_priv *priv = netdev_priv(dev);
-@@ -216,6 +642,9 @@ static void hisi_femac_adjust_link(struc
+@@ -216,6 +643,9 @@ static void hisi_femac_adjust_link(struc
  		writel(status, priv->port_base + MAC_PORTSET);
  		priv->link_status = status;
  		phy_print_status(phy);
@@ -643,7 +672,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  	}
  }
  
-@@ -226,6 +655,8 @@ static void hisi_femac_rx_refill(struct
+@@ -226,6 +656,8 @@ static void hisi_femac_rx_refill(struct
  	u32 pos;
  	u32 len = MAX_FRAME_SIZE;
  	dma_addr_t addr;
@@ -652,7 +681,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  
  	pos = rxq->head;
  	while (readl(priv->port_base + ADDRQ_STAT) & BIT_RX_READY) {
-@@ -236,10 +667,20 @@ static void hisi_femac_rx_refill(struct
+@@ -236,10 +668,20 @@ static void hisi_femac_rx_refill(struct
  				   pos, rxq->skb[pos]);
  			break;
  		}
@@ -673,7 +702,15 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  		addr = dma_map_single(priv->dev, skb->data, len,
  				      DMA_FROM_DEVICE);
  		if (dma_mapping_error(priv->dev, addr)) {
-@@ -261,6 +702,8 @@ static int hisi_femac_rx(struct net_devi
+@@ -254,13 +696,15 @@ static void hisi_femac_rx_refill(struct
+ 	rxq->head = pos;
+ }
+ 
+-static int hisi_femac_rx(struct net_device *dev, int limit)
++static u32 hisi_femac_rx(struct net_device *dev, int limit)
+ {
+ 	struct hisi_femac_priv *priv = netdev_priv(dev);
+ 	struct hisi_femac_queue *rxq = &priv->rxq;
  	struct sk_buff *skb;
  	dma_addr_t addr;
  	u32 rx_pkt_info, pos, len, rx_pkts_num = 0;
@@ -682,7 +719,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  
  	pos = rxq->tail;
  	while (readl(priv->glb_base + GLB_IRQ_RAW) & IRQ_INT_RX_RDY) {
-@@ -292,6 +735,33 @@ static int hisi_femac_rx(struct net_devi
+@@ -292,6 +736,33 @@ static int hisi_femac_rx(struct net_devi
  			goto next;
  		}
  
@@ -716,7 +753,25 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  		skb->protocol = eth_type_trans(skb, dev);
  		napi_gro_receive(&priv->napi, skb);
  		dev->stats.rx_packets++;
-@@ -353,9 +823,34 @@ static irqreturn_t hisi_femac_interrupt(
+@@ -314,7 +785,7 @@ static int hisi_femac_poll(struct napi_s
+ 					struct hisi_femac_priv, napi);
+ 	struct net_device *dev = priv->ndev;
+ 	int work_done = 0, task = budget;
+-	int ints, num;
++	u32 ints, num;
+ 
+ 	do {
+ 		hisi_femac_xmit_reclaim(dev);
+@@ -340,7 +811,7 @@ static int hisi_femac_poll(struct napi_s
+ 
+ static irqreturn_t hisi_femac_interrupt(int irq, void *dev_id)
+ {
+-	int ints;
++	u32 ints;
+ 	struct net_device *dev = (struct net_device *)dev_id;
+ 	struct hisi_femac_priv *priv = netdev_priv(dev);
+ 
+@@ -353,9 +824,34 @@ static irqreturn_t hisi_femac_interrupt(
  		napi_schedule(&priv->napi);
  	}
  
@@ -751,7 +806,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  static int hisi_femac_init_queue(struct device *dev,
  				 struct hisi_femac_queue *queue,
  				 unsigned int num)
-@@ -472,8 +967,11 @@ static int hisi_femac_net_open(struct ne
+@@ -472,8 +968,11 @@ static int hisi_femac_net_open(struct ne
  {
  	struct hisi_femac_priv *priv = netdev_priv(dev);
  
@@ -764,7 +819,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  	hisi_femac_rx_refill(priv);
  
  	netif_carrier_off(dev);
-@@ -485,12 +983,15 @@ static int hisi_femac_net_open(struct ne
+@@ -485,12 +984,15 @@ static int hisi_femac_net_open(struct ne
  	if (dev->phydev)
  		phy_start(dev->phydev);
  
@@ -781,7 +836,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  static int hisi_femac_net_close(struct net_device *dev)
  {
  	struct hisi_femac_priv *priv = netdev_priv(dev);
-@@ -503,6 +1004,14 @@ static int hisi_femac_net_close(struct n
+@@ -503,6 +1005,14 @@ static int hisi_femac_net_close(struct n
  	netif_stop_queue(dev);
  	napi_disable(&priv->napi);
  
@@ -796,7 +851,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  	hisi_femac_free_skb_rings(priv);
  
  	return 0;
-@@ -514,6 +1023,8 @@ static netdev_tx_t hisi_femac_net_xmit(s
+@@ -514,6 +1024,8 @@ static netdev_tx_t hisi_femac_net_xmit(s
  	struct hisi_femac_priv *priv = netdev_priv(dev);
  	struct hisi_femac_queue *txq = &priv->txq;
  	dma_addr_t addr;
@@ -805,7 +860,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  	u32 val;
  
  	val = readl(priv->port_base + ADDRQ_STAT);
-@@ -535,20 +1046,47 @@ static netdev_tx_t hisi_femac_net_xmit(s
+@@ -535,20 +1047,47 @@ static netdev_tx_t hisi_femac_net_xmit(s
  		return NETDEV_TX_BUSY;
  	}
  
@@ -846,7 +901,6 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
 +		/* Ensure desc info writen to memory before config hardware */
 +		wmb();
 +	}
-+
  	txq->dma_phys[txq->head] = addr;
  
  	txq->skb[txq->head] = skb;
@@ -854,11 +908,12 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  
  	writel(addr, priv->port_base + EQ_ADDR);
 -	writel(skb->len + ETH_FCS_LEN, priv->port_base + EQFRM_LEN);
++	writel(pkt_info, priv->port_base + EQFRM_LEN);
  
  	priv->tx_fifo_used_cnt++;
  
-@@ -687,6 +1225,78 @@ static void hisi_femac_net_set_rx_mode(s
- 	}
+@@ -699,10 +1238,84 @@ static int hisi_femac_net_ioctl(struct n
+ 	return phy_mii_ioctl(dev->phydev, ifreq, cmd);
  }
  
 +static void hisi_femac_get_pauseparam(struct net_device *dev,
@@ -933,10 +988,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
 +	return 0;
 +}
 +
- static int hisi_femac_net_ioctl(struct net_device *dev,
- 				struct ifreq *ifreq, int cmd)
- {
-@@ -703,6 +1313,8 @@ static const struct ethtool_ops hisi_fem
+ static const struct ethtool_ops hisi_femac_ethtools_ops = {
  	.get_link		= ethtool_op_get_link,
  	.get_link_ksettings	= phy_ethtool_get_link_ksettings,
  	.set_link_ksettings	= phy_ethtool_set_link_ksettings,
@@ -945,7 +997,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  };
  
  static const struct net_device_ops hisi_femac_netdev_ops = {
-@@ -713,8 +1325,25 @@ static const struct net_device_ops hisi_
+@@ -713,8 +1326,25 @@ static const struct net_device_ops hisi_
  	.ndo_set_mac_address	= hisi_femac_set_mac_address,
  	.ndo_set_rx_mode	= hisi_femac_net_set_rx_mode,
  	.ndo_change_mtu		= eth_change_mtu,
@@ -971,7 +1023,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  static void hisi_femac_core_reset(struct hisi_femac_priv *priv)
  {
  	reset_control_assert(priv->mac_rst);
-@@ -768,6 +1397,13 @@ static void hisi_femac_port_init(struct
+@@ -768,6 +1398,13 @@ static void hisi_femac_port_init(struct
  	writel(IRQ_ENA_PORT0_MASK, priv->glb_base + GLB_IRQ_RAW);
  	hisi_femac_irq_disable(priv, IRQ_ENA_PORT0_MASK | IRQ_ENA_PORT0);
  
@@ -985,7 +1037,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  	val = readl(priv->glb_base + GLB_FWCTRL);
  	val &= ~(FWCTRL_VLAN_ENABLE | FWCTRL_FWALL2CPU);
  	val |= FWCTRL_FW2CPU_ENA;
-@@ -788,6 +1424,8 @@ static void hisi_femac_port_init(struct
+@@ -788,6 +1425,8 @@ static void hisi_femac_port_init(struct
  
  	val = (HW_RX_FIFO_DEPTH << RX_DEPTH_OFFSET) | HW_TX_FIFO_DEPTH;
  	writel(val, priv->port_base + QLEN_SET);
@@ -994,7 +1046,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  }
  
  static int hisi_femac_drv_probe(struct platform_device *pdev)
-@@ -806,11 +1444,15 @@ static int hisi_femac_drv_probe(struct p
+@@ -806,11 +1445,15 @@ static int hisi_femac_drv_probe(struct p
  		return -ENOMEM;
  
  	platform_set_drvdata(pdev, ndev);
@@ -1010,7 +1062,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
  	priv->port_base = devm_ioremap_resource(dev, res);
  	if (IS_ERR(priv->port_base)) {
-@@ -858,6 +1500,8 @@ static int hisi_femac_drv_probe(struct p
+@@ -858,6 +1501,8 @@ static int hisi_femac_drv_probe(struct p
  		hisi_femac_phy_reset(priv);
  	}
  
@@ -1019,7 +1071,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  	phy = of_phy_get_and_connect(ndev, node, hisi_femac_adjust_link);
  	if (!phy) {
  		dev_err(dev, "connect to PHY failed!\n");
-@@ -865,6 +1509,12 @@ static int hisi_femac_drv_probe(struct p
+@@ -865,6 +1510,12 @@ static int hisi_femac_drv_probe(struct p
  		goto out_disable_clk;
  	}
  
@@ -1032,7 +1084,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  	phy_attached_print(phy, "phy_id=0x%.8lx, phy_mode=%s\n",
  			   (unsigned long)phy->phy_id,
  			   phy_modes(phy->interface));
-@@ -883,36 +1533,66 @@ static int hisi_femac_drv_probe(struct p
+@@ -883,36 +1534,66 @@ static int hisi_femac_drv_probe(struct p
  	ndev->netdev_ops = &hisi_femac_netdev_ops;
  	ndev->ethtool_ops = &hisi_femac_ethtools_ops;
  	netif_napi_add(ndev, &priv->napi, hisi_femac_poll, FEMAC_POLL_WEIGHT);
@@ -1103,7 +1155,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  out_disconnect_phy:
  	netif_napi_del(&priv->napi);
  	phy_disconnect(phy);
-@@ -931,6 +1611,8 @@ static int hisi_femac_drv_remove(struct
+@@ -931,6 +1612,8 @@ static int hisi_femac_drv_remove(struct
  
  	netif_napi_del(&priv->napi);
  	unregister_netdev(ndev);
@@ -1112,7 +1164,7 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/hisi_femac.c
  
  	phy_disconnect(ndev->phydev);
  	clk_disable_unprepare(priv->clk);
-@@ -981,6 +1663,7 @@ static const struct of_device_id hisi_fe
+@@ -981,6 +1664,7 @@ static const struct of_device_id hisi_fe
  	{.compatible = "hisilicon,hisi-femac-v1",},
  	{.compatible = "hisilicon,hisi-femac-v2",},
  	{.compatible = "hisilicon,hi3516cv300-femac",},
@@ -1189,3 +1241,384 @@ Index: linux-4.9.162/drivers/net/ethernet/hisilicon/phy_fix.h
 +#define MII_EXPMA               0x1e
 +
 +void phy_register_fixups(void);
+diff --git a/drivers/net/phy/mdio-hisi-femac.c b/drivers/net/phy/mdio-hisi-femac.c
+index b03fedd..9035579 100644
+--- a/drivers/net/phy/mdio-hisi-femac.c
++++ b/drivers/net/phy/mdio-hisi-femac.c
+@@ -24,6 +24,7 @@
+ #include <linux/of_address.h>
+ #include <linux/of_mdio.h>
+ #include <linux/platform_device.h>
++#include <linux/reset.h>
+ 
+ #define MDIO_RWCTRL		0x00
+ #define MDIO_RO_DATA		0x04
+@@ -32,16 +33,55 @@
+ #define BIT_PHY_ADDR_OFFSET	8
+ #define BIT_WR_DATA_OFFSET	16
+ 
++#define BIT_MASK_FEPHY_ADDR	GENMASK(4, 0)
++#define BIT_FEPHY_SEL		BIT(5)
++
++#define BIT_OFFSET_LD_SET	0
++#define BIT_OFFSET_LDO_SET	5
++#define BIT_OFFSET_R_TUNING	8
++
++#define MII_EXPMD		0x1d
++#define MII_EXPMA		0x1e
++
++#define REG_LD_AM		0x3050
++#define BIT_MASK_LD_SET		GENMASK(4, 0)
++#define REG_LDO_AM		0x3051
++#define BIT_MASK_LDO_SET	GENMASK(2, 0)
++#define REG_R_TUNING		0x3052
++#define BIT_MASK_R_TUNING	GENMASK(5, 0)
++#define REG_WR_DONE		0x3053
++#define BIT_CFG_DONE		BIT(0)
++#define BIT_CFG_ACK		BIT(1)
++#define REG_DEF_ATE		0x3057
++#define BIT_AUTOTRIM_DONE	BIT(0)
++
++#define PHY_RESET_DELAYS_PROPERTY	"hisilicon,phy-reset-delays-us"
++
++enum phy_reset_delays {
++	PRE_DELAY,
++	PULSE,
++	POST_DELAY,
++	DELAYS_NUM,
++};
++
+ struct hisi_femac_mdio_data {
+ 	struct clk *clk;
++	struct clk *fephy_clk;
++	struct reset_control *phy_rst;
++	struct reset_control *fephy_rst;
++	u32 phy_reset_delays[DELAYS_NUM];
+ 	void __iomem *membase;
++	void __iomem *fephy_iobase;
++	void __iomem *fephy_trim_iobase;
++	struct mii_bus *bus;
++	u32 phy_addr;
+ };
+ 
+ static int hisi_femac_mdio_wait_ready(struct hisi_femac_mdio_data *data)
+ {
+ 	u32 val;
+ 
+-	return readl_poll_timeout(data->membase + MDIO_RWCTRL,
++	return readl_poll_timeout_atomic(data->membase + MDIO_RWCTRL,
+ 				  val, val & MDIO_RW_FINISH, 20, 10000);
+ }
+ 
+@@ -54,8 +94,8 @@ static int hisi_femac_mdio_read(struct mii_bus *bus, int mii_id, int regnum)
+ 	if (ret)
+ 		return ret;
+ 
+-	writel((mii_id << BIT_PHY_ADDR_OFFSET) | regnum,
+-	       data->membase + MDIO_RWCTRL);
++	writel((mii_id << BIT_PHY_ADDR_OFFSET) | ((u32)regnum),
++		  data->membase + MDIO_RWCTRL);
+ 
+ 	ret = hisi_femac_mdio_wait_ready(data);
+ 	if (ret)
+@@ -75,12 +115,215 @@ static int hisi_femac_mdio_write(struct mii_bus *bus, int mii_id, int regnum,
+ 		return ret;
+ 
+ 	writel(MDIO_WRITE | (value << BIT_WR_DATA_OFFSET) |
+-	       (mii_id << BIT_PHY_ADDR_OFFSET) | regnum,
++	       (mii_id << BIT_PHY_ADDR_OFFSET) | ((u32)regnum),
+ 	       data->membase + MDIO_RWCTRL);
+ 
+ 	return hisi_femac_mdio_wait_ready(data);
+ }
+ 
++static void hisi_femac_sleep_us(u32 time_us)
++{
++	u32 time_ms;
++
++	if (!time_us)
++		return;
++
++	time_ms = DIV_ROUND_UP(time_us, 1000);
++	if (time_ms < 20)
++		usleep_range(time_us, time_us + 500);
++	else
++		msleep(time_ms);
++}
++
++static void hisi_femac_phy_reset(struct hisi_femac_mdio_data *data)
++{
++	/* To make sure PHY hardware reset success,
++	 * we must keep PHY in deassert state first and
++	 * then complete the hardware reset operation
++	 */
++	reset_control_deassert(data->phy_rst);
++	hisi_femac_sleep_us(data->phy_reset_delays[PRE_DELAY]);
++
++	reset_control_assert(data->phy_rst);
++	/* delay some time to ensure reset ok,
++	 * this depends on PHY hardware feature
++	 */
++	hisi_femac_sleep_us(data->phy_reset_delays[PULSE]);
++	reset_control_deassert(data->phy_rst);
++	/* delay some time to ensure later MDIO access */
++	hisi_femac_sleep_us(data->phy_reset_delays[POST_DELAY]);
++}
++
++static void hisi_femac_get_phy_addr(struct hisi_femac_mdio_data *data,
++				    struct device_node *np)
++{
++	struct device_node *child = NULL;
++	int addr;
++
++	child = of_get_next_available_child(np, NULL);
++	if (!child) {
++		pr_err("%s: No valid PHY device node!\n", __func__);
++		return;
++	}
++
++	addr = of_mdio_parse_addr(&data->bus->dev, child);
++	if (addr < 0) {
++		pr_err("%s: get PHY address failed!\n", __func__);
++		return;
++	}
++
++	data->phy_addr = addr;
++}
++
++static inline bool hisi_femac_use_fephy(struct hisi_femac_mdio_data *data)
++{
++	/*return false;*/
++	return (data->fephy_iobase ?
++			!(readl(data->fephy_iobase) & BIT_FEPHY_SEL) : false);
++}
++
++static void hisi_femac_fephy_reset(struct hisi_femac_mdio_data *data)
++{
++	u32 val;
++
++	/* disable MDCK clock to make sure FEPHY reset success */
++	clk_disable_unprepare(data->clk);
++
++	val = readl(data->fephy_iobase);
++	val &= ~BIT_MASK_FEPHY_ADDR;
++	val |= data->phy_addr;
++	writel(val, data->fephy_iobase);
++
++	clk_prepare_enable(data->fephy_clk);
++	udelay(10);
++
++	reset_control_assert(data->fephy_rst);
++	udelay(10);
++	reset_control_deassert(data->fephy_rst);
++	/* delay at least 15ms for MDIO operation */
++	msleep(20);
++
++	clk_prepare_enable(data->clk);
++	/* delay 5ms after enable MDCK to make sure FEPHY trim safe */
++	mdelay(5);
++}
++
++static inline int fephy_expanded_read(struct mii_bus *bus, int phy_addr,
++				      u32 reg_addr)
++{
++	int ret;
++
++	hisi_femac_mdio_write(bus, phy_addr, MII_EXPMA, reg_addr);
++	ret = hisi_femac_mdio_read(bus, phy_addr, MII_EXPMD);
++
++	return ret;
++}
++
++static inline int fephy_expanded_write(struct mii_bus *bus, int phy_addr,
++				       u32 reg_addr, u16 val)
++{
++	int ret;
++
++	hisi_femac_mdio_write(bus, phy_addr, MII_EXPMA, reg_addr);
++	ret = hisi_femac_mdio_write(bus, phy_addr, MII_EXPMD, val);
++
++	return ret;
++}
++
++void hisi_femac_fephy_use_default_trim(struct hisi_femac_mdio_data *data)
++{
++	unsigned short val;
++	int timeout = 3;
++
++	pr_info("No OTP data, festa PHY use default ATE parameters!\n");
++
++	do {
++		msleep(250);
++		val = fephy_expanded_read(data->bus, data->phy_addr,
++					  REG_DEF_ATE);
++		val &= BIT_AUTOTRIM_DONE;
++	} while (!val && --timeout);
++
++	if (!timeout)
++		pr_err("festa PHY wait autotrim done timeout!\n");
++
++	mdelay(5);
++}
++
++static void hisi_femac_fephy_trim(struct hisi_femac_mdio_data *data)
++{
++	struct mii_bus *bus = data->bus;
++	u32 phy_addr = data->phy_addr;
++	int timeout = 3000;
++	u32 val;
++	u8 ld_set;
++	u8 ldo_set;
++	u8 r_tuning;
++
++	val = readl(data->fephy_trim_iobase);
++	ld_set = (val >> BIT_OFFSET_LD_SET) & BIT_MASK_LD_SET;
++	ldo_set = (val >> BIT_OFFSET_LDO_SET) & BIT_MASK_LDO_SET;
++	r_tuning = (val >> BIT_OFFSET_R_TUNING) & BIT_MASK_R_TUNING;
++
++	if (!ld_set && !ldo_set && !r_tuning) {
++		hisi_femac_fephy_use_default_trim(data);
++		return;
++	}
++
++	val = fephy_expanded_read(bus, phy_addr, REG_LD_AM);
++	val = (val & ~BIT_MASK_LD_SET) | (ld_set & BIT_MASK_LD_SET);
++	fephy_expanded_write(bus, phy_addr, REG_LD_AM, val);
++
++	val = fephy_expanded_read(bus, phy_addr, REG_LDO_AM);
++	val = (val & ~BIT_MASK_LDO_SET) | (ldo_set & BIT_MASK_LDO_SET);
++	fephy_expanded_write(bus, phy_addr, REG_LDO_AM, val);
++
++	val = fephy_expanded_read(bus, phy_addr, REG_R_TUNING);
++	val = (val & ~BIT_MASK_R_TUNING) | (r_tuning & BIT_MASK_R_TUNING);
++	fephy_expanded_write(bus, phy_addr, REG_R_TUNING, val);
++
++	val = fephy_expanded_read(bus, phy_addr, REG_WR_DONE);
++	if (val & BIT_CFG_ACK)
++		pr_err("festa PHY 0x3053 bit CFG_ACK value: 1\n");
++	val = val | BIT_CFG_DONE;
++	fephy_expanded_write(bus, phy_addr, REG_WR_DONE, val);
++
++	do {
++		usleep_range(100, 150);
++		val = fephy_expanded_read(bus, phy_addr, REG_WR_DONE);
++		val &= BIT_CFG_ACK;
++	} while (!val && --timeout);
++	if (!timeout)
++		pr_err("festa PHY 0x3053 wait bit CFG_ACK timeout!\n");
++
++	mdelay(5);
++
++	pr_info("FEPHY:addr=%d, la_am=0x%x, ldo_am=0x%x, r_tuning=0x%x\n",
++		phy_addr,
++		fephy_expanded_read(bus, phy_addr, REG_LD_AM),
++		fephy_expanded_read(bus, phy_addr, REG_LDO_AM),
++		fephy_expanded_read(bus, phy_addr, REG_R_TUNING));
++}
++
++static void hisi_femac_fephy_reset_and_trim(struct hisi_femac_mdio_data *data)
++{
++	hisi_femac_fephy_reset(data);
++	hisi_femac_fephy_trim(data);
++}
++
++static void hisi_femac_fephy_set_phy_addr(struct hisi_femac_mdio_data *data)
++{
++	u32 val;
++
++	if (!data->fephy_iobase)
++		return;
++
++	val = readl(data->fephy_iobase);
++	val &= ~BIT_MASK_FEPHY_ADDR;
++	val |= (data->phy_addr + 1);
++	writel(val, data->fephy_iobase);
++}
++
+ static int hisi_femac_mdio_probe(struct platform_device *pdev)
+ {
+ 	struct device_node *np = pdev->dev.of_node;
+@@ -100,6 +343,7 @@ static int hisi_femac_mdio_probe(struct platform_device *pdev)
+ 	bus->parent = &pdev->dev;
+ 
+ 	data = bus->priv;
++	data->bus = bus;
+ 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+ 	data->membase = devm_ioremap_resource(&pdev->dev, res);
+ 	if (IS_ERR(data->membase)) {
+@@ -107,16 +351,66 @@ static int hisi_femac_mdio_probe(struct platform_device *pdev)
+ 		goto err_out_free_mdiobus;
+ 	}
+ 
+-	data->clk = devm_clk_get(&pdev->dev, NULL);
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
++	if (res) {
++		data->fephy_iobase = devm_ioremap_resource(&pdev->dev, res);
++		if (IS_ERR(data->fephy_iobase)) {
++			ret = PTR_ERR(data->fephy_iobase);
++			goto err_out_free_mdiobus;
++		}
++	} else {
++		data->fephy_iobase = NULL;
++	}
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 2);
++	if (res) {
++		data->fephy_trim_iobase = devm_ioremap_resource(&pdev->dev,
++								res);
++		if (IS_ERR(data->fephy_trim_iobase)) {
++			ret = PTR_ERR(data->fephy_trim_iobase);
++			goto err_out_free_mdiobus;
++		}
++	} else {
++		data->fephy_trim_iobase = NULL;
++	}
++
++	data->clk = devm_clk_get(&pdev->dev, "mdio");
+ 	if (IS_ERR(data->clk)) {
+ 		ret = PTR_ERR(data->clk);
+ 		goto err_out_free_mdiobus;
+ 	}
+ 
++	data->fephy_clk = devm_clk_get(&pdev->dev, "phy");
++	if (IS_ERR(data->fephy_clk))
++		data->fephy_clk = NULL;
++
+ 	ret = clk_prepare_enable(data->clk);
+ 	if (ret)
+ 		goto err_out_free_mdiobus;
+ 
++	data->phy_rst = devm_reset_control_get(&pdev->dev, "external-phy");
++	if (IS_ERR(data->phy_rst)) {
++		data->phy_rst = NULL;
++	} else {
++		ret = of_property_read_u32_array(np,
++						 PHY_RESET_DELAYS_PROPERTY,
++						 data->phy_reset_delays,
++						 DELAYS_NUM);
++		if (ret)
++			goto err_out_disable_clk;
++		hisi_femac_phy_reset(data);
++	}
++
++	data->fephy_rst = devm_reset_control_get(&pdev->dev, "internal-phy");
++	if (IS_ERR(data->fephy_rst))
++		data->fephy_rst = NULL;
++
++	hisi_femac_get_phy_addr(data, np);
++	if (hisi_femac_use_fephy(data))
++		hisi_femac_fephy_reset_and_trim(data);
++	else
++		hisi_femac_fephy_set_phy_addr(data);
++
+ 	ret = of_mdiobus_register(bus, np);
+ 	if (ret)
+ 		goto err_out_disable_clk;
+@@ -126,6 +420,7 @@ static int hisi_femac_mdio_probe(struct platform_device *pdev)
+ 	return 0;
+ 
+ err_out_disable_clk:
++	clk_disable_unprepare(data->fephy_clk);
+ 	clk_disable_unprepare(data->clk);
+ err_out_free_mdiobus:
+ 	mdiobus_free(bus);
