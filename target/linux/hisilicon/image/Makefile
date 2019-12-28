@@ -13,7 +13,8 @@ DTS:=hi3536dv100-demb
 define Build/hisi-build
 	cp $(KDIR)/zImage $(KDIR)/zImage-dtb
 	$(call Image/BuildDTB,../dts/$(DTS).dts,$(KDIR)/$(DTS).dtb)
-	cat $(KDIR)/$(DTS).dtb >> $(KDIR)/zImage-dtb mkimage -A arm -O linux -T kernel -C none -a 0x80008000 -e 0x80008000 -n 'Linux' -d $(KDIR)/zImage-dtb $(KDIR)/uImage-dtb
+	cat $(KDIR)/$(DTS).dtb >> $(KDIR)/zImage-dtb
+  mkimage -A arm -O linux -T kernel -C none -a 0x80008000 -e 0x80008000 -n 'Linux' -d $(KDIR)/zImage-dtb $(KDIR)/uImage-dtb
 endef
 
 define Device/Default
